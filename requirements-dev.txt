@@ -1,0 +1,8 @@
+# Local development (make venv): the test requirements CI installs, plus the
+# style and spec tools CI doesn't run, and pandas for README.Rmd (make knit)
+-r tests/requirements.txt
+black
+isort
+flake8
+openapi-spec-validator
+pandas

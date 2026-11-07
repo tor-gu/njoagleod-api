@@ -1,0 +1,9 @@
+{
+    "python.envFile": "${workspaceFolder}/.envs",
+    "python.testing.pytestArgs": [
+        "-v",
+        "tests/unit"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true
+}
