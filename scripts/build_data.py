@@ -101,6 +101,8 @@ def encode_column(name, type_, values, levels):
     if type_ == "logical":
         return encode_logical(name, values)
     if type_ == "factor":
+        if not levels:
+            raise BuildError(f"{name}: no levels in levels.csv")
         return encode_factor(name, values, levels)
     if type_ == "character":
         return encode_character(name, values)
@@ -217,9 +219,7 @@ def main(argv):
         out_dir = build(data_dir, root)
     except BuildError as e:
         sys.exit(f"build_data: {e}")
-    size = sum(
-        os.path.getsize(os.path.join(out_dir, f)) for f in os.listdir(out_dir)
-    )
+    size = sum(os.path.getsize(os.path.join(out_dir, f)) for f in os.listdir(out_dir))
     print(f"Wrote {out_dir} ({size:,} bytes)")
 
 
