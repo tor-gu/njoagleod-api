@@ -1,5 +1,5 @@
 project               = "njoagleod-api"
-github_subject_prefix = "REPLACE_WITH_REPO_ID" # gh api repos/tor-gu/njoagleod-api/actions/oidc/customization/sub
+github_subject_prefix = "repo:tor-gu@99346055/njoagleod-api@1449515654"
 
 envs = {
   dev = {

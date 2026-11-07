@@ -105,7 +105,7 @@ largest = (pd.concat([totals, female], axis=1).fillna({"female": 0}).reset_index
            [["agency_name", "county", "officers", "pct_female"]])
 ```
 ```{r echo=FALSE}
-knitr::kable(py$largest)
+knitr::kable(py$largest, row.names = FALSE)
 ```
 
 #### Applicants
