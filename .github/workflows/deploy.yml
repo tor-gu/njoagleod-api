@@ -1,0 +1,202 @@
+# Test, build and deploy: dev branch -> dev, main -> prod (after approval).
+#
+# AWS access is through OIDC roles defined in infra/github/. Jobs without an
+# environment use the readonly role; the deploy job runs in the GitHub
+# environment dev or prod and uses that environment's deploy role. The prod
+# environment requires a reviewer, so a run on main stops before deploying
+# until the plan job's summary has been checked and the run approved.
+#
+# Settings (stack names, role ARNs, layer version, ...) are in pipeline/env/.
+# Adapted from njlea-api's workflow. There are no tables to plan or load
+# here: the function's data is built from data/ (make data) and packaged with
+# its code.
+
+name: deploy
+
+on:
+  push:
+    branches: [dev, main]
+
+permissions:
+  id-token: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Unit tests on the fixture data, then the spec's examples and the parity
+  # with R on the full data
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipeline/load_env.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.READONLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r tests/requirements.txt
+      - run: scripts/fetch_torguapi.sh "$TORGUAPI_LAYER_ARN" "$TORGUAPI_LAYER_VERSION"
+      - run: make unit_test
+      - run: make data
+      - run: make example_test
+      - run: make parity_test
+
+  # Nothing has native dependencies, so no build container is needed
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+        with:
+          use-installer: true
+      - run: pip install pyyaml
+      - run: make data apigateway_spec
+      - name: data sizes
+        run: |
+          { echo "## data"; echo '```'; cat data/SOURCE; echo
+            du -sh diversity/data; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - run: sam build --template template.yaml --build-dir sam-build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sam-build
+          path: sam-build
+          retention-days: 7
+
+  # What the deploy job will change, written to the job summary. Read this
+  # before approving a prod deploy.
+  plan:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipeline/load_env.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.READONLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+      - name: deployed vs. this commit
+        run: |
+          {
+            echo "## $STACK_NAME ($ENV)"
+            echo "### deployed parameters"
+            echo '```'
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+                --query 'Stacks[0].Parameters[].[ParameterKey,ParameterValue]' --output text 2>&1 \
+              || echo "(not deployed yet)"
+            echo '```'
+            echo "### this commit"
+            echo '```'
+            echo "DataVersion $(sed -n 's/^version=//p' data/SOURCE)"
+            echo "TorguapiLayerVersion $TORGUAPI_LAYER_VERSION"
+            echo "ApiRoot $API_ROOT"
+            echo
+            cat data/SOURCE
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: [build, plan]
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    concurrency:
+      group: deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipeline/load_env.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+        with:
+          use-installer: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sam-build
+          path: sam-build
+      # sam-build/template.yaml includes ../apigateway-openapi.yaml, from this
+      # checkout rather than the artifact
+      - run: pip install pyyaml
+      - run: make apigateway_spec
+      # Compared after sam deploy, to tell whether the deploy changed the stack
+      - name: stack update time
+        run: |
+          echo "STACK_UPDATED_BEFORE=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+              --query 'Stacks[0].LastUpdatedTime' --output text 2>/dev/null || echo none)" >> "$GITHUB_ENV"
+      - name: sam deploy
+        run: |
+          DATA_VERSION=$(sed -n 's/^version=//p' data/SOURCE)
+          sam deploy --stack-name "$STACK_NAME" \
+                     --template sam-build/template.yaml \
+                     --capabilities CAPABILITY_IAM \
+                     --region "$AWS_REGION" \
+                     --s3-bucket "$SAM_ARTIFACT_BUCKET" \
+                     --s3-prefix "$STACK_NAME" \
+                     --no-fail-on-empty-changeset \
+                     --no-confirm-changeset \
+                     --role-arn "$CFN_EXECUTION_ROLE_ARN" \
+                     --parameter-overrides \
+                           TorguapiLayerArn="$TORGUAPI_LAYER_ARN" \
+                           TorguapiLayerVersion="$TORGUAPI_LAYER_VERSION" \
+                           EnvPrefix=\"${ENV_PREFIX}\" \
+                           DataVersion="$DATA_VERSION" \
+                           ApiRoot="$API_ROOT"
+      # CloudFront caches responses for up to 24 h. Data, code and layer
+      # changes can all change them, so clear the cache after any deploy that
+      # changed the stack.
+      - name: clear CloudFront cache
+        run: |
+          after=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+              --query 'Stacks[0].LastUpdatedTime' --output text)
+          { echo "## CloudFront cache ($DISTRIBUTION_ID)"
+            if [ "$after" = "$STACK_UPDATED_BEFORE" ]; then
+              echo "Stack unchanged, cache not cleared."
+            else
+              id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+                  --paths '/nj/officer_diversity/*' --query Invalidation.Id --output text)
+              echo "Invalidation \`$id\` for \`/nj/officer_diversity/*\`."
+            fi; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: stack outputs
+        run: |
+          { echo "## $STACK_NAME outputs"; echo '```'
+            aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+                --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output text
+            echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  # Every spec example through API Gateway (not CloudFront)
+  integration:
+    needs: deploy
+    if: github.ref_name == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: pipeline/load_env.sh
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.READONLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r tests/requirements.txt
+      - run: AWS_SAM_STACK_NAME="$STACK_NAME" make integration_test
