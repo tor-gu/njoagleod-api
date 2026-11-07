@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template for njoagleod-api
+
+
+Parameters:
+  TorguapiLayerArn:
+    Type: String
+    Description: Arn for torguapi layer (not a layer version, so exclude the version number)
+  TorguapiLayerVersion:
+    Type: Number
+    Description: Version number for TorguapiLayer (11 or later, for lists of dicts and the page parameter fix)
+    MinValue: "11"
+  EnvPrefix:
+    Type: String
+    Description: Prefix for resource names
+    Default: ""
+  ApiRoot:
+    Type: String
+    Description: API root
+    Default: https://api.tor-gu.com
+  DataVersion:
+    Type: String
+    Description: njoagleod version the data was built from (data/SOURCE)
+    Default: ""
+
+Globals:
+  Api:
+    TracingEnabled: True
+
+
+Resources:
+  # One function for every route (one warm container), packaging its data
+  # (diversity/data/, built by make data); no common layer
+  DiversityFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: diversity/
+      FunctionName: !Sub "${EnvPrefix}njoagleod-api"
+      Description: "njoagleod-api: NJ OAG Law Enforcement Officer Diversity data"
+      Handler: app.diversity_api.diversity_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Timeout: 10
+      MemorySize: 512
+      Tracing: Active
+      Environment:
+        Variables:
+          API_ROOT: !Ref ApiRoot
+          DATA_VERSION: !Ref DataVersion
+      Layers:
+        - !Sub "${TorguapiLayerArn}:${TorguapiLayerVersion}"
+      Events:
+        GetOfficers:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/officers
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+        GetApplicants:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/applicants
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+        GetOfficerCounts:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/counts/officers
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+        GetApplicantCounts:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/counts/applicants
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+        GetAgencyPractices:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/agency_practices
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+        GetAgencyPractice:
+          Type: Api
+          Properties:
+            Path: /nj/officer_diversity/agency_practices/{year}/{agency_id}
+            Method: GET
+            RestApiId: !Ref OfficerDiversityApi
+
+  OfficerDiversityApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      Name: !Sub "${EnvPrefix}OfficerDiversityApi"
+      # The spec without its examples (CloudFormation rejects their nulls):
+      # make apigateway_spec writes it from officer-diversity-openapi.yaml
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: apigateway-openapi.yaml
+      # Starting values; CloudFront caches repeated requests in front of this
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: 50
+          ThrottlingBurstLimit: 100
+        - ResourcePath: "/~1nj~1officer_diversity~1counts~1officers"
+          HttpMethod: GET
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 20
+        - ResourcePath: "/~1nj~1officer_diversity~1counts~1applicants"
+          HttpMethod: GET
+          ThrottlingRateLimit: 10
+          ThrottlingBurstLimit: 20
+
+Outputs:
+  OfficerDiversityApiId:
+    Description: "API Gateway REST API id (the origin of the /nj/officer_diversity/* route in torgu-api-cloudfront)"
+    Value: !Ref OfficerDiversityApi
+  OfficerDiversityApiUrl:
+    Description: "API Gateway endpoint URL for the Prod stage"
+    Value: !Sub "https://${OfficerDiversityApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/nj/officer_diversity/"
+  DiversityFunction:
+    Description: "Lambda Function ARN"
+    Value: !GetAtt DiversityFunction.Arn
