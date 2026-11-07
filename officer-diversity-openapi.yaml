@@ -1,0 +1,1299 @@
+openapi: '3.0.2'
+info:
+  version: '1.0.0'
+  title: 'njoagleod-api'
+  description: >
+    # NJ OAG Law Enforcement Officer Diversity data
+
+    A cleaned-up copy of the NJ Attorney General's Law Enforcement Officer
+    Diversity data (https://www.njoag.gov/policerecruiting/), as published in the
+    [njoagleod data package for R](https://github.com/tor-gu/njoagleod) (version
+    2.0.0). Officers are covered for 2021 to 2025; applicants and agency practices
+    for 2022 to 2025. Field names and values are the same as in the R package.
+
+
+    ## Conventions
+
+    * Every reply has the form `{"data": [...], "links": {...}, "meta": {...}}`.
+    `data` is always a list of flat records.
+
+    * Collections are paginated with `page_number` (default 1) and `page_size`
+    (default 100). Follow `links.next` until it is absent to retrieve every page.
+    `links` carries the filters of the request.
+
+    * A request that matches nothing, including a `year` or `agency_id` that isn't
+    in the table, or a `page_number` past the last page, returns `404`. An unknown
+    query parameter or an invalid value returns `400`.
+
+    * Filters are combined with AND, and match values exactly: `true` and `false`
+    in lower case, and levels as listed, in the same case. Missing values are
+    `null`, and filters can not select `null`.
+
+
+    ## Rows are combinations, not people
+
+    `/officers` and `/applicants` are count tables. Each row is a combination of
+    year, agency and characteristics, with the number of people who share it in
+    `officer_count` or `applicant_count`. Counting rows counts combinations. Use
+    `/counts/officers` and `/counts/applicants`, or sum the count field.
+
+
+    ## Agencies
+
+    Records identify agencies by `agency_id` only: the agency's identifier in
+    [njlea](https://github.com/tor-gu/njlea), a registry of NJ law enforcement
+    agencies (e.g. `NJLEA0199` is Newark PD). Agency names, counties, levels and
+    functions, and the municipalities each agency serves, come from the njlea API
+    ([njlea-api](https://tor-gu.com/apis/njlea.html), at `/nj/lea/*`): join on
+    `agency_id` with `/nj/lea/agencies/{year}`. The same `agency_id` is the agency
+    of `/nj/use_of_force/*`
+    ([njoaguof-api](https://tor-gu.com/apis/njoaguof.html)).
+
+
+    ## Caveats
+
+    * The data is as reported by each agency, and some agency-years look
+    incomplete; nothing is corrected. For example, Lakewood PD (`NJLEA0401`)
+    reports 153 officers in 2021 but 20 in 2022 and 58 in 2025; Saddle Brook PD
+    (`NJLEA0077`) reports about 30 officers every year until 2025, when it reports
+    5; and Fair Lawn PD (`NJLEA0038`) reports 7 to 17 officers in 2021 to 2024 and
+    56 in 2025.
+
+    * The promotion columns are almost entirely `null` in 2021: 30,617 of the
+    30,647 officers. Don't read `null` as "no". They are incomplete in later years
+    too: in 2024, `promoted` is `null` for 4,261 of 31,627 officers.
+
+    * `"Correctional Officer"` appears as a `new_rank` for the Cape May
+    (`NJLEA0165`) and Hunterdon (`NJLEA0253`) sheriff's offices, although the data
+    is meant to exclude correctional police officers.
+
+servers:
+  - url: "{protocol}://{server}"
+    variables:
+      protocol:
+        default: https
+        enum:
+          - https
+          - http
+      server:
+        default: api.tor-gu.com
+tags:
+- name: officers
+  description: Officer counts by agency, year, demographics and promotion
+- name: applicants
+  description: Applicant counts by agency, year, demographics, type and outcome
+- name: counts
+  description: Totals of officers and applicants
+- name: practices
+  description: Agency hiring and promotion practices
+paths:
+  /nj/officer_diversity/officers:
+    summary: Get the officer table
+    parameters:
+    - $ref: '#/components/parameters/filter_year'
+    - $ref: '#/components/parameters/filter_agency_id'
+    - $ref: '#/components/parameters/filter_officer_race'
+    - $ref: '#/components/parameters/filter_officer_age_range'
+    - $ref: '#/components/parameters/filter_officer_gender'
+    - $ref: '#/components/parameters/filter_eligible_for_promotion'
+    - $ref: '#/components/parameters/filter_applied_for_promotion'
+    - $ref: '#/components/parameters/filter_promoted'
+    - $ref: '#/components/parameters/filter_old_rank'
+    - $ref: '#/components/parameters/filter_new_rank'
+    - $ref: '#/components/parameters/pageNumber'
+    - $ref: '#/components/parameters/pageSize'
+    get:
+      description: >
+        The `officer` table of the R package, in its order. Each row is a combination of
+        year, agency and officer characteristics, and `officer_count` is the number of
+        officers who share it. To count officers use `/counts/officers`, or sum
+        `officer_count`: counting rows counts combinations, not officers.
+      responses:
+        '200':
+          description: Get the officer table
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              example:
+                data:
+                - {"year": 2025, "agency_id": "NJLEA0199", "officer_race": "Black or African American", "officer_age_range": "25 or less", "officer_gender": "Female", "eligible_for_promotion": true, "applied_for_promotion": true, "promoted": false, "old_rank": null, "new_rank": null, "officer_count": 2}
+                - {"year": 2025, "agency_id": "NJLEA0199", "officer_race": "Black or African American", "officer_age_range": "25 or less", "officer_gender": "Female", "eligible_for_promotion": true, "applied_for_promotion": true, "promoted": true, "old_rank": "Officer", "new_rank": "Sergeant", "officer_count": 1}
+                links:
+                  self: https://api.tor-gu.com/nj/officer_diversity/officers?agency_id=NJLEA0199&year=2025&page_number=1&page_size=2
+                  next: https://api.tor-gu.com/nj/officer_diversity/officers?agency_id=NJLEA0199&year=2025&page_number=2&page_size=2
+                meta:
+                  record_count: 113
+                  page_count: 57
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - officers
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+  /nj/officer_diversity/applicants:
+    summary: Get the applicant table
+    parameters:
+    - $ref: '#/components/parameters/filter_year'
+    - $ref: '#/components/parameters/filter_agency_id'
+    - $ref: '#/components/parameters/filter_applicant_race'
+    - $ref: '#/components/parameters/filter_applicant_age_range'
+    - $ref: '#/components/parameters/filter_applicant_gender'
+    - $ref: '#/components/parameters/filter_applicant_type'
+    - $ref: '#/components/parameters/filter_outcome'
+    - $ref: '#/components/parameters/filter_no_appointment_reason'
+    - $ref: '#/components/parameters/pageNumber'
+    - $ref: '#/components/parameters/pageSize'
+    get:
+      description: >
+        The `applicant` table of the R package, in its order. Each row is a combination of
+        year, agency and applicant characteristics, and `applicant_count` is the number of
+        applicants who share it. To count applicants use `/counts/applicants`, or sum
+        `applicant_count`: counting rows counts combinations, not applicants.
+      responses:
+        '200':
+          description: Get the applicant table
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              example:
+                data:
+                - {"year": 2025, "agency_id": "NJLEA0199", "applicant_race": "Black or African American", "applicant_age_range": "25 or less", "applicant_gender": "Female", "applicant_type": "CSC Exam Exempt Direct Hire", "outcome": "Appointed to Agency", "no_appointment_reason": null, "applicant_count": 3}
+                - {"year": 2025, "agency_id": "NJLEA0199", "applicant_race": "Black or African American", "applicant_age_range": "25 or less", "applicant_gender": "Male", "applicant_type": "CSC Exam Exempt Direct Hire", "outcome": "Appointed to Agency", "no_appointment_reason": null, "applicant_count": 6}
+                links:
+                  self: https://api.tor-gu.com/nj/officer_diversity/applicants?agency_id=NJLEA0199&outcome=Appointed%20to%20Agency&year=2025&page_number=1&page_size=2
+                  next: https://api.tor-gu.com/nj/officer_diversity/applicants?agency_id=NJLEA0199&outcome=Appointed%20to%20Agency&year=2025&page_number=2&page_size=2
+                meta:
+                  record_count: 8
+                  page_count: 4
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - applicants
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+  /nj/officer_diversity/counts/officers:
+    summary: Count officers, grouped by up to four columns
+    parameters:
+    - $ref: '#/components/parameters/byOfficers'
+    - $ref: '#/components/parameters/filter_year'
+    - $ref: '#/components/parameters/filter_agency_id'
+    - $ref: '#/components/parameters/filter_officer_race'
+    - $ref: '#/components/parameters/filter_officer_age_range'
+    - $ref: '#/components/parameters/filter_officer_gender'
+    - $ref: '#/components/parameters/filter_eligible_for_promotion'
+    - $ref: '#/components/parameters/filter_applied_for_promotion'
+    - $ref: '#/components/parameters/filter_promoted'
+    - $ref: '#/components/parameters/filter_old_rank'
+    - $ref: '#/components/parameters/filter_new_rank'
+    - $ref: '#/components/parameters/pageNumber'
+    - $ref: '#/components/parameters/pageSize'
+    get:
+      description: >
+        The sum of `officer_count` over the rows matching the filters, for each combination of the
+        `by` columns, ordered by the `by` columns. Only combinations that occur are returned,
+        and `null` is its own group. Values with declared levels are ordered as their levels,
+        `false` before `true`, with `null` last.
+      responses:
+        '200':
+          description: Count officers, grouped by up to four columns
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              examples:
+                byYear:
+                  summary: "by=year"
+                  value:
+                    data:
+                    - {"year": 2021, "count": 30647}
+                    - {"year": 2022, "count": 31067}
+                    - {"year": 2023, "count": 31303}
+                    - {"year": 2024, "count": 31627}
+                    - {"year": 2025, "count": 31538}
+                    links:
+                      self: https://api.tor-gu.com/nj/officer_diversity/counts/officers?by=year&page_number=1&page_size=100
+                    meta:
+                      record_count: 5
+                      page_count: 1
+                byRace:
+                  summary: "by=officer_race&year=2025&agency_id=NJLEA0199"
+                  value:
+                    data:
+                    - {"officer_race": "Black or African American", "count": 377}
+                    - {"officer_race": "Hispanic", "count": 541}
+                    - {"officer_race": "Other", "count": 5}
+                    - {"officer_race": "White", "count": 182}
+                    links:
+                      self: https://api.tor-gu.com/nj/officer_diversity/counts/officers?agency_id=NJLEA0199&by=officer_race&year=2025&page_number=1&page_size=100
+                    meta:
+                      record_count: 4
+                      page_count: 1
+                byYearAndPromoted:
+                  summary: "by=year,promoted&page_size=4"
+                  value:
+                    data:
+                    - {"year": 2021, "promoted": false, "count": 28}
+                    - {"year": 2021, "promoted": true, "count": 2}
+                    - {"year": 2021, "promoted": null, "count": 30617}
+                    - {"year": 2022, "promoted": false, "count": 20704}
+                    links:
+                      self: https://api.tor-gu.com/nj/officer_diversity/counts/officers?by=year%2Cpromoted&page_number=1&page_size=4
+                      next: https://api.tor-gu.com/nj/officer_diversity/counts/officers?by=year%2Cpromoted&page_number=2&page_size=4
+                    meta:
+                      record_count: 15
+                      page_count: 4
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - counts
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+  /nj/officer_diversity/counts/applicants:
+    summary: Count applicants, grouped by up to four columns
+    parameters:
+    - $ref: '#/components/parameters/byApplicants'
+    - $ref: '#/components/parameters/filter_year'
+    - $ref: '#/components/parameters/filter_agency_id'
+    - $ref: '#/components/parameters/filter_applicant_race'
+    - $ref: '#/components/parameters/filter_applicant_age_range'
+    - $ref: '#/components/parameters/filter_applicant_gender'
+    - $ref: '#/components/parameters/filter_applicant_type'
+    - $ref: '#/components/parameters/filter_outcome'
+    - $ref: '#/components/parameters/filter_no_appointment_reason'
+    - $ref: '#/components/parameters/pageNumber'
+    - $ref: '#/components/parameters/pageSize'
+    get:
+      description: >
+        The sum of `applicant_count` over the rows matching the filters, for each combination of the
+        `by` columns, ordered by the `by` columns. Only combinations that occur are returned,
+        and `null` is its own group. Values with declared levels are ordered as their levels,
+        `false` before `true`, with `null` last.
+      responses:
+        '200':
+          description: Count applicants, grouped by up to four columns
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              examples:
+                byOutcome:
+                  summary: "by=year,outcome&year=2025"
+                  value:
+                    data:
+                    - {"year": 2025, "outcome": "Appointed to Agency", "count": 2307}
+                    - {"year": 2025, "outcome": "Not Appointed", "count": 20145}
+                    - {"year": 2025, "outcome": "Pending", "count": 4729}
+                    - {"year": 2025, "outcome": null, "count": 1536}
+                    links:
+                      self: https://api.tor-gu.com/nj/officer_diversity/counts/applicants?by=year%2Coutcome&year=2025&page_number=1&page_size=100
+                    meta:
+                      record_count: 4
+                      page_count: 1
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - counts
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+  /nj/officer_diversity/agency_practices:
+    summary: Get agency hiring and promotion practices
+    parameters:
+    - $ref: '#/components/parameters/filter_year'
+    - $ref: '#/components/parameters/filter_agency_id'
+    - $ref: '#/components/parameters/filter_applications_received'
+    - $ref: '#/components/parameters/filter_hiring_civil_service'
+    - $ref: '#/components/parameters/filter_hire_method_civil_service_list'
+    - $ref: '#/components/parameters/filter_hire_method_non_civil_service_list'
+    - $ref: '#/components/parameters/filter_hire_method_intergovernmental_transfer'
+    - $ref: '#/components/parameters/filter_hire_method_waiver'
+    - $ref: '#/components/parameters/filter_hire_method_bcpo_direct'
+    - $ref: '#/components/parameters/filter_hire_element_return_the_card'
+    - $ref: '#/components/parameters/filter_hire_element_formal_application'
+    - $ref: '#/components/parameters/filter_hire_element_interview_board'
+    - $ref: '#/components/parameters/filter_hire_element_written_exam'
+    - $ref: '#/components/parameters/filter_hire_element_local_preference'
+    - $ref: '#/components/parameters/filter_hire_element_veteran_preference'
+    - $ref: '#/components/parameters/filter_hire_element_drug_test'
+    - $ref: '#/components/parameters/filter_hire_element_medical_exam'
+    - $ref: '#/components/parameters/filter_hire_element_psychiatric_exam'
+    - $ref: '#/components/parameters/filter_appointed_before_academy'
+    - $ref: '#/components/parameters/filter_appointed_after_academy'
+    - $ref: '#/components/parameters/filter_promotion_applications_received'
+    - $ref: '#/components/parameters/filter_promotion_civil_service'
+    - $ref: '#/components/parameters/filter_promotion_civil_service_all_ranks'
+    - $ref: '#/components/parameters/filter_promotion_practice_civil_service_list'
+    - $ref: '#/components/parameters/filter_promotion_practice_non_civil_service_list'
+    - $ref: '#/components/parameters/filter_promotion_practice_interview'
+    - $ref: '#/components/parameters/pageNumber'
+    - $ref: '#/components/parameters/pageSize'
+    get:
+      description: >
+        The `agency_practice` table of the R package: each agency's answers to the NJ OAG
+        questions about how it hires and promotes officers, one row per agency per year.
+        `null` means not answered. Every answer is also a filter, so `meta.record_count`
+        says how many agencies gave it.
+      responses:
+        '200':
+          description: Get agency hiring and promotion practices
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              example:
+                data:
+                - {"year": 2025, "agency_id": "NJLEA0002", "applications_received": true, "hiring_civil_service": true, "hire_method_civil_service_list": false, "hire_method_non_civil_service_list": false, "hire_method_intergovernmental_transfer": false, "hire_method_waiver": true, "hire_method_bcpo_direct": false, "hire_element_return_the_card": false, "hire_element_formal_application": true, "hire_element_interview_board": false, "hire_element_written_exam": false, "hire_element_local_preference": true, "hire_element_veteran_preference": true, "hire_element_drug_test": true, "hire_element_medical_exam": true, "hire_element_psychiatric_exam": true, "appointed_before_academy": true, "appointed_after_academy": false, "promotion_applications_received": false, "promotion_civil_service": true, "promotion_civil_service_all_ranks": true, "promotion_practice_civil_service_list": true, "promotion_practice_non_civil_service_list": false, "promotion_practice_interview": false}
+                links:
+                  self: https://api.tor-gu.com/nj/officer_diversity/agency_practices?hiring_civil_service=true&year=2025&page_number=1&page_size=1
+                  next: https://api.tor-gu.com/nj/officer_diversity/agency_practices?hiring_civil_service=true&year=2025&page_number=2&page_size=1
+                meta:
+                  record_count: 202
+                  page_count: 202
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - practices
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+  /nj/officer_diversity/agency_practices/{year}/{agency_id}:
+    summary: Get one agency's practices in a year
+    parameters:
+    - $ref: '#/components/parameters/pathYear'
+    - $ref: '#/components/parameters/pathAgencyId'
+    get:
+      description: >
+        The agency's row of `/agency_practices` for the year. Not paginated. An agency with
+        no row for the year returns `404`.
+      responses:
+        '200':
+          description: Get one agency's practices in a year
+          content:
+            'application/vnd.api+json':
+              schema:
+                $ref: '#/components/schemas/success'
+              example:
+                data:
+                - {"year": 2025, "agency_id": "NJLEA0199", "applications_received": true, "hiring_civil_service": true, "hire_method_civil_service_list": true, "hire_method_non_civil_service_list": true, "hire_method_intergovernmental_transfer": false, "hire_method_waiver": false, "hire_method_bcpo_direct": false, "hire_element_return_the_card": false, "hire_element_formal_application": true, "hire_element_interview_board": false, "hire_element_written_exam": false, "hire_element_local_preference": true, "hire_element_veteran_preference": false, "hire_element_drug_test": true, "hire_element_medical_exam": true, "hire_element_psychiatric_exam": true, "appointed_before_academy": false, "appointed_after_academy": true, "promotion_applications_received": true, "promotion_civil_service": true, "promotion_civil_service_all_ranks": true, "promotion_practice_civil_service_list": true, "promotion_practice_non_civil_service_list": false, "promotion_practice_interview": false}
+                links:
+                  self: https://api.tor-gu.com/nj/officer_diversity/agency_practices/2025/NJLEA0199
+        '400':
+          description: Bad Request
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '404':
+          description: Not Found
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+        '500':
+          description: Internal Server Error
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/failure'
+      tags:
+      - practices
+      x-amazon-apigateway-integration:
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DiversityFunction.Arn}/invocations"
+        responses:
+          default:
+            statusCode: "201"
+        passthroughBehavior: "when_no_match"
+        httpMethod: "POST"
+        contentHandling: "CONVERT_TO_TEXT"
+        type: "aws_proxy"
+components:
+  schemas:
+    success:
+      type: object
+      required:
+        - data
+        - links
+      properties:
+        data:
+          $ref: "#/components/schemas/data"
+        links:
+          $ref: "#/components/schemas/links"
+        meta:
+          $ref: "#/components/schemas/meta"
+    data:
+      oneOf:
+        - type: array
+          items:
+            $ref: '#/components/schemas/officer'
+        - type: array
+          items:
+            $ref: '#/components/schemas/applicant'
+        - type: array
+          items:
+            $ref: '#/components/schemas/agencyPractice'
+        - type: array
+          items:
+            $ref: '#/components/schemas/officerCount'
+        - type: array
+          items:
+            $ref: '#/components/schemas/applicantCount'
+    links:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/link"
+    link:
+      type: string
+      format: uri-reference
+    meta:
+      type: object
+      properties:
+        record_count:
+          type: integer
+        page_count:
+          type: integer
+    agencyId:
+      description: The agency's identifier in njlea; see `/nj/lea/agencies/{year}` for its name and county
+      type: string
+      pattern: '^NJLEA[0-9]{4}$'
+      example: NJLEA0199
+    year:
+      type: integer
+      example: 2025
+    race:
+      description: "Race or ethnicity. As in the US Census, Hispanic people are `Hispanic` regardless of race"
+      type: string
+      enum:
+        - "American Indian or Alaska Native"
+        - "Asian"
+        - "Black or African American"
+        - "Hispanic"
+        - "Native Hawaiian or other Pacific Islander"
+        - "Other"
+        - "Two or more races"
+        - "White"
+      example: "American Indian or Alaska Native"
+    ageRange:
+      description: "Age range"
+      type: string
+      enum:
+        - "25 or less"
+        - "26-35"
+        - "36-45"
+        - "46-55"
+        - "56-65"
+        - "66+"
+      example: "25 or less"
+    gender:
+      description: "Gender"
+      type: string
+      enum:
+        - "Male"
+        - "Female"
+        - "X or Non-Binary"
+      example: "Male"
+    rank:
+      description: "Rank, standardized by the source"
+      type: string
+      enum:
+        - "Police Aide"
+        - "Officer"
+        - "Corporal"
+        - "Investigator"
+        - "Detective"
+        - "Special Agent"
+        - "Correctional Officer"
+        - "Sergeant"
+        - "Detective Sergeant"
+        - "Lieutenant"
+        - "Detective Lieutenant"
+        - "Captain"
+        - "Detective Captain"
+        - "Major"
+        - "Lt. Colonel"
+        - "Deputy Chief"
+        - "Chief"
+        - "Warden"
+        - "Undersheriff"
+        - "Sheriff"
+      example: "Police Aide"
+    applicantType:
+      description: "How the applicant applied"
+      type: string
+      enum:
+        - "Direct Hire"
+        - "CSC Exam Exempt Direct Hire"
+        - "Transfer"
+        - "Waiver"
+      example: "Direct Hire"
+    outcome:
+      description: "Outcome of the application"
+      type: string
+      enum:
+        - "Appointed to Agency"
+        - "Not Appointed"
+        - "Pending"
+      example: "Appointed to Agency"
+    noAppointmentReason:
+      description: "Reason the applicant was not appointed"
+      type: string
+      enum:
+        - "Academy Failure"
+        - "Applicant Withdrawal"
+        - "Defer"
+        - "Did not meet minimum qualifications"
+        - "Failed background check - Criminal History"
+        - "Failed background check - Financial"
+        - "Failed Drug Test"
+        - "Interview Panel Recommendation"
+        - "Physical Qualification Exam"
+        - "Residency Requirement"
+        - "Written Exam"
+        - "Other"
+      example: "Academy Failure"
+    officer:
+      type: object
+      properties:
+        year:
+          $ref: '#/components/schemas/year'
+        agency_id:
+          $ref: '#/components/schemas/agencyId'
+        officer_race:
+          description: "Officer race or ethnicity. As in the US Census, Hispanic officers are 'Hispanic' regardless of race."
+          allOf:
+            - $ref: '#/components/schemas/race'
+          nullable: true
+        officer_age_range:
+          description: "Officer age range (ordered factor)"
+          allOf:
+            - $ref: '#/components/schemas/ageRange'
+          nullable: true
+        officer_gender:
+          description: "Officer gender"
+          allOf:
+            - $ref: '#/components/schemas/gender'
+          nullable: true
+        eligible_for_promotion:
+          description: "Was the officer eligible for promotion?"
+          type: boolean
+          nullable: true
+        applied_for_promotion:
+          description: "Did the officer apply for promotion?"
+          type: boolean
+          nullable: true
+        promoted:
+          description: "Was the officer promoted?"
+          type: boolean
+          nullable: true
+        old_rank:
+          description: "Rank before promotion, standardized by the source"
+          allOf:
+            - $ref: '#/components/schemas/rank'
+          nullable: true
+        new_rank:
+          description: "Rank after promotion, standardized by the source"
+          allOf:
+            - $ref: '#/components/schemas/rank'
+          nullable: true
+        officer_count:
+          description: "Number of officers"
+          type: integer
+          minimum: 1
+    applicant:
+      type: object
+      properties:
+        year:
+          $ref: '#/components/schemas/year'
+        agency_id:
+          $ref: '#/components/schemas/agencyId'
+        applicant_race:
+          description: "Applicant race or ethnicity. As in the US Census, Hispanic applicants are 'Hispanic' regardless of race."
+          allOf:
+            - $ref: '#/components/schemas/race'
+          nullable: true
+        applicant_age_range:
+          description: "Applicant age range (ordered factor)"
+          allOf:
+            - $ref: '#/components/schemas/ageRange'
+          nullable: true
+        applicant_gender:
+          description: "Applicant gender"
+          allOf:
+            - $ref: '#/components/schemas/gender'
+          nullable: true
+        applicant_type:
+          description: "Applicant type, such as 'Direct Hire' or 'Transfer'"
+          allOf:
+            - $ref: '#/components/schemas/applicantType'
+          nullable: true
+        outcome:
+          description: "'Appointed to Agency', 'Not Appointed' or 'Pending'"
+          allOf:
+            - $ref: '#/components/schemas/outcome'
+          nullable: true
+        no_appointment_reason:
+          description: "Reason the applicant was not appointed"
+          allOf:
+            - $ref: '#/components/schemas/noAppointmentReason'
+          nullable: true
+        applicant_count:
+          description: "Number of applicants"
+          type: integer
+          minimum: 1
+    agencyPractice:
+      type: object
+      properties:
+        year:
+          $ref: '#/components/schemas/year'
+        agency_id:
+          $ref: '#/components/schemas/agencyId'
+        applications_received:
+          description: "Did the agency receive any applications for employment?"
+          type: boolean
+          nullable: true
+        hiring_civil_service:
+          description: "Is hiring governed by Civil Service?"
+          type: boolean
+          nullable: true
+        hire_method_civil_service_list:
+          description: "Hires from a Civil Service exam list"
+          type: boolean
+          nullable: true
+        hire_method_non_civil_service_list:
+          description: "Hires from a non-Civil Service exam list"
+          type: boolean
+          nullable: true
+        hire_method_intergovernmental_transfer:
+          description: "Hires by inter-governmental transfer"
+          type: boolean
+          nullable: true
+        hire_method_waiver:
+          description: "Hires by training waiver"
+          type: boolean
+          nullable: true
+        hire_method_bcpo_direct:
+          description: "Hires graduates of the Basic Course for Police Officers (BCPO) directly"
+          type: boolean
+          nullable: true
+        hire_element_return_the_card:
+          description: "Application uses 'return the card'"
+          type: boolean
+          nullable: true
+        hire_element_formal_application:
+          description: "Application uses a formal application"
+          type: boolean
+          nullable: true
+        hire_element_interview_board:
+          description: "Application uses an interview board"
+          type: boolean
+          nullable: true
+        hire_element_written_exam:
+          description: "Application uses a written exam"
+          type: boolean
+          nullable: true
+        hire_element_local_preference:
+          description: "Preference for local or county applicants"
+          type: boolean
+          nullable: true
+        hire_element_veteran_preference:
+          description: "Preference for veteran applicants"
+          type: boolean
+          nullable: true
+        hire_element_drug_test:
+          description: "Application uses drug testing"
+          type: boolean
+          nullable: true
+        hire_element_medical_exam:
+          description: "Application uses a medical exam"
+          type: boolean
+          nullable: true
+        hire_element_psychiatric_exam:
+          description: "Application uses a psychiatric exam"
+          type: boolean
+          nullable: true
+        appointed_before_academy:
+          description: "Officers are appointed before entering the academy"
+          type: boolean
+          nullable: true
+        appointed_after_academy:
+          description: "Officers are appointed after completing the academy"
+          type: boolean
+          nullable: true
+        promotion_applications_received:
+          description: "Did the agency receive any applications for promotion?"
+          type: boolean
+          nullable: true
+        promotion_civil_service:
+          description: "Are promotions governed by Civil Service regulations?"
+          type: boolean
+          nullable: true
+        promotion_civil_service_all_ranks:
+          description: "Are promotions governed by Civil Service regulations for all ranks?"
+          type: boolean
+          nullable: true
+        promotion_practice_civil_service_list:
+          description: "Promotes from a Civil Service exam list"
+          type: boolean
+          nullable: true
+        promotion_practice_non_civil_service_list:
+          description: "Promotes from a non-Civil Service exam list"
+          type: boolean
+          nullable: true
+        promotion_practice_interview:
+          description: "Promotion uses an interview"
+          type: boolean
+          nullable: true
+    officerCount:
+      description: The `by` columns of the request, and the total
+      type: object
+      required:
+        - count
+      properties:
+        year:
+          $ref: '#/components/schemas/year'
+        agency_id:
+          $ref: '#/components/schemas/agencyId'
+        officer_race:
+          allOf:
+            - $ref: '#/components/schemas/race'
+          nullable: true
+        officer_age_range:
+          allOf:
+            - $ref: '#/components/schemas/ageRange'
+          nullable: true
+        officer_gender:
+          allOf:
+            - $ref: '#/components/schemas/gender'
+          nullable: true
+        eligible_for_promotion:
+          type: boolean
+          nullable: true
+        applied_for_promotion:
+          type: boolean
+          nullable: true
+        promoted:
+          type: boolean
+          nullable: true
+        old_rank:
+          allOf:
+            - $ref: '#/components/schemas/rank'
+          nullable: true
+        new_rank:
+          allOf:
+            - $ref: '#/components/schemas/rank'
+          nullable: true
+        count:
+          description: Sum of `officer_count`
+          type: integer
+          minimum: 1
+    applicantCount:
+      description: The `by` columns of the request, and the total
+      type: object
+      required:
+        - count
+      properties:
+        year:
+          $ref: '#/components/schemas/year'
+        agency_id:
+          $ref: '#/components/schemas/agencyId'
+        applicant_race:
+          allOf:
+            - $ref: '#/components/schemas/race'
+          nullable: true
+        applicant_age_range:
+          allOf:
+            - $ref: '#/components/schemas/ageRange'
+          nullable: true
+        applicant_gender:
+          allOf:
+            - $ref: '#/components/schemas/gender'
+          nullable: true
+        applicant_type:
+          allOf:
+            - $ref: '#/components/schemas/applicantType'
+          nullable: true
+        outcome:
+          allOf:
+            - $ref: '#/components/schemas/outcome'
+          nullable: true
+        no_appointment_reason:
+          allOf:
+            - $ref: '#/components/schemas/noAppointmentReason'
+          nullable: true
+        count:
+          description: Sum of `applicant_count`
+          type: integer
+          minimum: 1
+    failure:
+      type: object
+      required:
+        - errors
+      properties:
+        errors:
+          type: array
+          items:
+            type: object
+            required:
+              - status
+            properties:
+              status:
+                type: string
+              detail:
+                type: string
+  parameters:
+    pageNumber:
+      name: page_number
+      in: query
+      description: The page to return, from 1
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    pageSize:
+      name: page_size
+      in: query
+      description: The number of records per page
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 100
+    pathYear:
+      name: year
+      in: path
+      description: The year
+      required: true
+      schema:
+        $ref: '#/components/schemas/year'
+    pathAgencyId:
+      name: agency_id
+      in: path
+      description: The agency
+      required: true
+      schema:
+        $ref: '#/components/schemas/agencyId'
+    byOfficers:
+      name: by
+      in: query
+      description: >
+        Comma-separated list of 1 to 4 distinct columns to group by. Allowed:
+        `year`, `agency_id`, `officer_race`, `officer_age_range`,
+        `officer_gender`, `eligible_for_promotion`, `applied_for_promotion`,
+        `promoted`, `old_rank`, `new_rank`.
+      required: true
+      schema:
+        type: string
+        example: year,officer_race
+    byApplicants:
+      name: by
+      in: query
+      description: >
+        Comma-separated list of 1 to 4 distinct columns to group by. Allowed:
+        `year`, `agency_id`, `applicant_race`, `applicant_age_range`,
+        `applicant_gender`, `applicant_type`, `outcome`,
+        `no_appointment_reason`.
+      required: true
+      schema:
+        type: string
+        example: year,outcome
+    filter_year:
+      name: year
+      in: query
+      description: "Only this year"
+      required: false
+      schema:
+        $ref: '#/components/schemas/year'
+    filter_agency_id:
+      name: agency_id
+      in: query
+      description: "Only this agency"
+      required: false
+      schema:
+        $ref: '#/components/schemas/agencyId'
+    filter_officer_race:
+      name: officer_race
+      in: query
+      description: "Only this value of `officer_race`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/race'
+    filter_officer_age_range:
+      name: officer_age_range
+      in: query
+      description: "Only this value of `officer_age_range`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/ageRange'
+    filter_officer_gender:
+      name: officer_gender
+      in: query
+      description: "Only this value of `officer_gender`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/gender'
+    filter_eligible_for_promotion:
+      name: eligible_for_promotion
+      in: query
+      description: "Was the officer eligible for promotion? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_applied_for_promotion:
+      name: applied_for_promotion
+      in: query
+      description: "Did the officer apply for promotion? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promoted:
+      name: promoted
+      in: query
+      description: "Was the officer promoted? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_old_rank:
+      name: old_rank
+      in: query
+      description: "Only this value of `old_rank`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/rank'
+    filter_new_rank:
+      name: new_rank
+      in: query
+      description: "Only this value of `new_rank`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/rank'
+    filter_applicant_race:
+      name: applicant_race
+      in: query
+      description: "Only this value of `applicant_race`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/race'
+    filter_applicant_age_range:
+      name: applicant_age_range
+      in: query
+      description: "Only this value of `applicant_age_range`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/ageRange'
+    filter_applicant_gender:
+      name: applicant_gender
+      in: query
+      description: "Only this value of `applicant_gender`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/gender'
+    filter_applicant_type:
+      name: applicant_type
+      in: query
+      description: "Only this value of `applicant_type`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/applicantType'
+    filter_outcome:
+      name: outcome
+      in: query
+      description: "Only this value of `outcome`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/outcome'
+    filter_no_appointment_reason:
+      name: no_appointment_reason
+      in: query
+      description: "Only this value of `no_appointment_reason`"
+      required: false
+      schema:
+        $ref: '#/components/schemas/noAppointmentReason'
+    filter_applications_received:
+      name: applications_received
+      in: query
+      description: "Did the agency receive any applications for employment? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hiring_civil_service:
+      name: hiring_civil_service
+      in: query
+      description: "Is hiring governed by Civil Service? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_method_civil_service_list:
+      name: hire_method_civil_service_list
+      in: query
+      description: "Hires from a Civil Service exam list (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_method_non_civil_service_list:
+      name: hire_method_non_civil_service_list
+      in: query
+      description: "Hires from a non-Civil Service exam list (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_method_intergovernmental_transfer:
+      name: hire_method_intergovernmental_transfer
+      in: query
+      description: "Hires by inter-governmental transfer (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_method_waiver:
+      name: hire_method_waiver
+      in: query
+      description: "Hires by training waiver (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_method_bcpo_direct:
+      name: hire_method_bcpo_direct
+      in: query
+      description: "Hires graduates of the Basic Course for Police Officers (BCPO) directly (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_return_the_card:
+      name: hire_element_return_the_card
+      in: query
+      description: "Application uses 'return the card' (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_formal_application:
+      name: hire_element_formal_application
+      in: query
+      description: "Application uses a formal application (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_interview_board:
+      name: hire_element_interview_board
+      in: query
+      description: "Application uses an interview board (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_written_exam:
+      name: hire_element_written_exam
+      in: query
+      description: "Application uses a written exam (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_local_preference:
+      name: hire_element_local_preference
+      in: query
+      description: "Preference for local or county applicants (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_veteran_preference:
+      name: hire_element_veteran_preference
+      in: query
+      description: "Preference for veteran applicants (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_drug_test:
+      name: hire_element_drug_test
+      in: query
+      description: "Application uses drug testing (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_medical_exam:
+      name: hire_element_medical_exam
+      in: query
+      description: "Application uses a medical exam (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_hire_element_psychiatric_exam:
+      name: hire_element_psychiatric_exam
+      in: query
+      description: "Application uses a psychiatric exam (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_appointed_before_academy:
+      name: appointed_before_academy
+      in: query
+      description: "Officers are appointed before entering the academy (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_appointed_after_academy:
+      name: appointed_after_academy
+      in: query
+      description: "Officers are appointed after completing the academy (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_applications_received:
+      name: promotion_applications_received
+      in: query
+      description: "Did the agency receive any applications for promotion? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_civil_service:
+      name: promotion_civil_service
+      in: query
+      description: "Are promotions governed by Civil Service regulations? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_civil_service_all_ranks:
+      name: promotion_civil_service_all_ranks
+      in: query
+      description: "Are promotions governed by Civil Service regulations for all ranks? (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_practice_civil_service_list:
+      name: promotion_practice_civil_service_list
+      in: query
+      description: "Promotes from a Civil Service exam list (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_practice_non_civil_service_list:
+      name: promotion_practice_non_civil_service_list
+      in: query
+      description: "Promotes from a non-Civil Service exam list (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
+    filter_promotion_practice_interview:
+      name: promotion_practice_interview
+      in: query
+      description: "Promotion uses an interview (`true` or `false`)"
+      required: false
+      schema:
+        type: boolean
